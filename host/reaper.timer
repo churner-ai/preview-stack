@@ -1,0 +1,14 @@
+[Unit]
+Description=Hourly Churner preview TTL sweep
+
+[Timer]
+# Hourly, with a spread so a fleet of hosts does not post to Churner in
+# lockstep, and Persistent so a host that was stopped over the TTL boundary
+# sweeps once on boot rather than waiting for the next hour.
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+Unit=churner-preview-reaper.service
+
+[Install]
+WantedBy=timers.target

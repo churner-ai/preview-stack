@@ -1,0 +1,46 @@
+# Caddyfile template for a Churner preview host (design spec §7).
+#
+# `bootstrap.sh` renders this to /etc/caddy/Caddyfile, substituting:
+#   @@PREVIEW_DOMAIN@@  the delegated zone, e.g. preview.example.com
+#   @@ROUTES_DIR@@      where per-PR route files live
+#
+# TLS is terminated at the load balancer with the module's
+# `*.@@PREVIEW_DOMAIN@@` ACM certificate, so this proxy speaks plain HTTP on
+# port 80 and `auto_https` is OFF. A host that tried to obtain its own
+# certificate would fail forever: the ACME challenge arrives at the ALB, which
+# does not forward it, and the retry loop would be the only thing in the logs.
+
+{
+	# The admin API would listen on 2019 with no authentication. Nothing here
+	# uses it — routes are files, and a route change is applied by
+	# `systemctl reload caddy`, whose ExecReload sends SIGUSR1. (`caddy
+	# reload` would POST to the admin API and, with it off, silently do
+	# nothing — a destroyed preview would keep serving.)
+	admin off
+	auto_https off
+	servers {
+		# The ALB is the only thing that can reach this port, and it is what
+		# knows the client's real address.
+		trusted_proxies static private_ranges
+	}
+}
+
+# Fallback. This is also the steady state of a stack with no previews open,
+# and it is what the target group's health check hits — the check accepts
+# 200-499 precisely so "the proxy is answering" is health, rather than "some
+# preview happens to exist".
+:80 {
+	respond "No preview is registered for this hostname." 404
+}
+
+# One file per open preview, dropped here by the deploy workflow and removed
+# by the reaper:
+#
+#   # @@ROUTES_DIR@@/pr-123.caddy
+#   http://123.@@PREVIEW_DOMAIN@@ {
+#   	reverse_proxy 127.0.0.1:31234
+#   }
+#
+# Caddy matches the most specific host first, so a registered preview wins
+# over the fallback above regardless of file order.
+import @@ROUTES_DIR@@/*.caddy

@@ -1,0 +1,17 @@
+[Unit]
+Description=Churner preview TTL reaper — destroy previews past expires_at
+Documentation=https://github.com/churner-ai/churner/tree/main/infrastructure/customer/preview-stack
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The unit reads /etc/churner-preview/env itself (written by bootstrap.sh) so
+# a re-bootstrap that changes the tracker URL or the secret names does not
+# need this file reinstalled.
+ExecStart=/usr/local/bin/churner-preview-reaper.sh
+# A sweep that fails must not disable the timer: the next hour's run is the
+# retry, and a preview left alive for one more hour is a smaller failure than
+# a reaper that stops sweeping.
+SuccessExitStatus=0
+TimeoutStartSec=600
