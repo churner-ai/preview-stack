@@ -54,6 +54,13 @@ CONFIG_FILE="${CHURNER_PREVIEW_CONFIG:-/etc/churner-preview/env}"
 # just typed.
 SECRETS_PREFIX_INPUT="${CHURNER_SECRETS_PREFIX:-}"
 
+# Same reasoning, for the open-preview cap: a changed `PreviewMaxOpenPreviews`
+# only reaches an EXISTING host through this workflow's own `max-open-previews`
+# input (the module's own value is baked into UserData at first boot only —
+# changing it either does nothing, under Terraform, or replaces the host,
+# under CloudFormation). Captured before sourcing for the same reason.
+MAX_OPEN_PREVIEWS_INPUT="${CHURNER_MAX_OPEN_PREVIEWS:-}"
+
 if [ -f "$CONFIG_FILE" ]; then
   # shellcheck disable=SC1090
   . "$CONFIG_FILE"
@@ -123,6 +130,47 @@ AWS_ARGS=""
 if [ -n "$AWS_REGION_NAME" ]; then
   AWS_ARGS="--region $AWS_REGION_NAME"
 fi
+
+# --- Open-preview cap -------------------------------------------------------
+#
+# Counted HERE, in the validation block, so a refusal leaves the host exactly
+# as it found it: no database, no image pull, no container, no route. The count
+# excludes THIS pull request, because a redeploy replaces its own container
+# (`docker rm -f` below) rather than taking a second slot — without that, the
+# cap would lock out the very branch it had already admitted.
+#
+# The reaper is deliberately not involved: every removal it makes today is
+# TTL-justified, and evicting the oldest preview to make room would report
+# "destroyed" about one nobody's TTL had reached.
+#
+# The per-run value (this workflow call's OWN `max-open-previews` input, saved
+# above as `MAX_OPEN_PREVIEWS_INPUT` before the config file could overwrite
+# `CHURNER_MAX_OPEN_PREVIEWS`) wins over the bootstrap file's — that is what
+# makes a cap change land on the NEXT PUSH rather than only a freshly-created
+# host. An empty per-run value is what an un-upgraded caller workflow ALSO
+# produces (GitHub Actions cannot distinguish "the caller omitted this input"
+# from "the caller wants no cap" — both resolve to the schema default), so it
+# defers to whatever the host was bootstrapped with instead of silently
+# clearing an existing cap.
+MAX_OPEN="${MAX_OPEN_PREVIEWS_INPUT:-${CHURNER_MAX_OPEN_PREVIEWS:-}}"
+case "$MAX_OPEN" in
+  '') ;;
+  *[!0-9]*) die "churner-preview-cap-reached: CHURNER_MAX_OPEN_PREVIEWS is not a whole number (${MAX_OPEN})" ;;
+  *)
+    OPEN_PRS="$(
+      docker ps -a --filter 'label=churner.preview=true' \
+        --format '{{.Label "churner.preview.pr"}}' 2>/dev/null || true
+    )"
+    OPEN_COUNT=0
+    for open_pr in $OPEN_PRS; do
+      [ "$open_pr" = "$PR" ] && continue
+      OPEN_COUNT=$(( OPEN_COUNT + 1 ))
+    done
+    if [ "$OPEN_COUNT" -ge "$MAX_OPEN" ]; then
+      die "churner-preview-cap-reached: ${OPEN_COUNT} previews are already open and the limit is ${MAX_OPEN}. Close a pull request, or raise the limit on the Previews settings card."
+    fi
+    ;;
+esac
 
 # --- Expiry -----------------------------------------------------------------
 #

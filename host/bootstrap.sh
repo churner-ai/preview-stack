@@ -102,6 +102,7 @@ SECRETS_PREFIX="${CHURNER_SECRETS_PREFIX:-}"
 DB_SECRET_NAME="${CHURNER_DB_SECRET_NAME:-}"
 TOKEN_SECRET_NAME="${CHURNER_TOKEN_SECRET_NAME:-}"
 AWS_REGION_NAME="${CHURNER_AWS_REGION:-}"
+MAX_OPEN_PREVIEWS="${CHURNER_MAX_OPEN_PREVIEWS:-}"
 
 # CloudFormation resource signalling. Empty under Terraform, which has no
 # equivalent — there the host reports readiness by registering with SSM.
@@ -252,6 +253,7 @@ CHURNER_DB_SECRET_NAME=${DB_SECRET_NAME}
 CHURNER_TOKEN_SECRET_NAME=${TOKEN_SECRET_NAME}
 CHURNER_AWS_REGION=${AWS_REGION_NAME}
 CHURNER_ROUTES_DIR=${ROUTES_DIR}
+CHURNER_MAX_OPEN_PREVIEWS=${MAX_OPEN_PREVIEWS}
 CONFIG
 # The file names secrets; it does not contain them. Still 0640 — nothing
 # outside root and the reaper has any business reading the host's topology.

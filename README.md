@@ -116,12 +116,16 @@ posting nothing.
 The host fetches `bootstrap.sh` at boot and runs it as root. That fetch is
 pinned and verified:
 
-- `PreviewScriptsBaseUrl` defaults to a **tag** (`refs/tags/v1`) on the public
+- `PreviewScriptsBaseUrl` defaults to a **tag** (`refs/tags/v2`) on the public
   [`churner-ai/preview-stack`](https://github.com/churner-ai/preview-stack)
-  repository, never a branch. The host fetches with a plain unauthenticated
-  `curl`, holding no GitHub credential of any kind, so the repository it reads
-  from has to be public — the digests below, not the repository's visibility,
-  are what make the bytes trustworthy.
+  repository, never a branch. Tags there are IMMUTABLE once published — `v1`
+  goes on serving exactly the bytes every stack applied before this repo's
+  fix round 1 (batch F) pins, forever; a script change cuts a NEW tag rather
+  than re-pointing an old one, so a customer's `PreviewScriptsSha256` and the
+  tag it names can never disagree. The host fetches with a plain
+  unauthenticated `curl`, holding no GitHub credential of any kind, so the
+  repository it reads from has to be public — the digests below, not the
+  repository's visibility, are what make the bytes trustworthy.
 - `PreviewScriptsSha256` is the SHA-256 of `bootstrap.sh`. UserData verifies
   the download against it **before** executing anything.
 - `bootstrap.sh` carries pinned digests for everything it goes on to fetch:
@@ -140,7 +144,7 @@ reaches the running proxy, does not exist before that.
 If you vendor these scripts, point `PreviewScriptsBaseUrl` at your copy and
 re-pin `PreviewScriptsSha256` to match.
 
-### Maintaining the `v1` tag
+### Maintaining the tag
 
 These files are AUTHORED in the private churner monorepo and PUBLISHED to
 `churner-ai/preview-stack` by `scripts/release-preview-stack.sh`, which lays
@@ -157,15 +161,18 @@ github-actions/preview-workflow/host/deploy-preview.sh     -> host/deploy-previe
 github-actions/preview-workflow/host/destroy-preview.sh    -> host/destroy-preview.sh
 ```
 
-**`refs/tags/v1` on `churner-ai/preview-stack` must be cut from a release
-whose `bootstrap.sh` hashes to the `PREVIEW_BOOTSTRAP_SHA256` the renderer
-ships**, and re-cut (or superseded by `v2`) on **every** edit to any of those
-files. The release script checks all three pin sets against the bytes it is
-about to tag and refuses on a mismatch, but nothing can enforce the other
-half: no test can see what a git tag on a remote points at. Skip the release
-and the failure is silent in the worst way — a host fetches the tagged
-`bootstrap.sh`, its digest does not match the parameter, and every new preview
-host refuses to bootstrap until someone re-cuts the tag.
+**The tag currently in effect, `refs/tags/v2` on `churner-ai/preview-stack`,
+must be cut from a release whose `bootstrap.sh` hashes to the
+`PREVIEW_BOOTSTRAP_SHA256` the renderer ships.** As of fix round 1 (batch F,
+M7) tags on this repository are IMMUTABLE — never re-cut, never moved —
+so a script change cuts the NEXT tag (`v3`, then `v4`, ...) instead. The
+release script checks all three pin sets against the bytes it is about to
+tag and refuses both a mismatch AND an already-existing tag name, but
+nothing can enforce the other half: no test can see what a git tag on a
+remote points at. Skip the release entirely and the failure is silent in the
+worst way — a host fetches the tag its stack parameter names, its digest
+does not match, and every new preview host refuses to bootstrap until
+someone cuts a release.
 
 The digests inside `bootstrap.sh` have the same property in reverse: they are
 checked against the working tree by CI, so an edit to `reaper.sh` without
@@ -175,17 +182,20 @@ host.
 **Release order.** Three public repositories are published from this monorepo,
 and one of them is a prerequisite of another:
 
-1. `churner-ai/preview-stack@v1` — `scripts/release-preview-stack.sh`. FIRST,
-   because it serves the bytes (3) pins. The digests baked into the monorepo
-   (`PREVIEW_BOOTSTRAP_SHA256`, the table inside `bootstrap.sh`, and the
-   workflow's two host-script pins) must already match, which the script
-   checks before it moves the tag.
+1. `churner-ai/preview-stack@<tag>` — `scripts/release-preview-stack.sh`.
+   FIRST, because it serves the bytes (3) pins. The digests baked into the
+   monorepo (`PREVIEW_BOOTSTRAP_SHA256`, the table inside `bootstrap.sh`, and
+   the workflow's two host-script pins) must already match, which the script
+   checks before it cuts the tag — and the tag itself must not already exist,
+   since tags here are immutable.
 2. `churner-ai/report-preview@v1` — `scripts/release-report-preview.sh`.
-   Independent of the other two; order among them does not matter.
-3. `churner-ai/preview-workflow@v1` — `scripts/release-preview-workflow.sh`.
-   AFTER (1): its `env:` block pins the two host scripts by SHA-256, and a
-   workflow whose pins name bytes no tag serves yet fails every run at
-   `sha256sum -c`.
+   Independent of the other two; order among them does not matter. Still on
+   `v1` — this batch published no change to what it serves, so there was
+   nothing to cut a new tag for.
+3. `churner-ai/preview-workflow@<tag>` — `scripts/release-preview-workflow.sh`,
+   under the SAME tag name as (1). AFTER (1): its `env:` block pins the two
+   host scripts by SHA-256, and a workflow whose pins name bytes no tag
+   serves yet fails every run at `sha256sum -c`.
 
 The monorepo itself needs **no** public tag: nothing fetches from it any more.
 
