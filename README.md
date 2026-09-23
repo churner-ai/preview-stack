@@ -165,7 +165,12 @@ github-actions/preview-workflow/host/destroy-preview.sh    -> host/destroy-previ
 must be cut from a release whose `bootstrap.sh` hashes to the
 `PREVIEW_BOOTSTRAP_SHA256` the renderer ships.** As of fix round 1 (batch F,
 M7) tags on this repository are IMMUTABLE — never re-cut, never moved —
-so a script change cuts the NEXT tag (`v3`, then `v4`, ...) instead. The
+so a script change cuts the NEXT tag (`v4`, then `v5`, ...) instead. The
+preview workflow's `scripts-base-url` may name a LATER tag than the stack:
+`v3` changed only `host/deploy-preview.sh`, so hosts keep booting from `v2`
+while preview runs fetch from `v3`. `infrastructure/customer/published-tags.txt`
+records which tag serves which pinned bytes, and the release script refuses a
+tag whose copied bytes disagree with it. The
 release script checks all three pin sets against the bytes it is about to
 tag and refuses both a mismatch AND an already-existing tag name, but
 nothing can enforce the other half: no test can see what a git tag on a

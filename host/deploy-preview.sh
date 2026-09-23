@@ -96,7 +96,6 @@ AWS_REGION_NAME="${CHURNER_AWS_REGION:-}"
 
 PR_RE='^[0-9]+$'
 SHA_RE='^[0-9a-fA-F]{7,64}$'
-ENV_NAME_RE='^[A-Za-z_][A-Za-z0-9_]*$'
 IMAGE_RE='^[A-Za-z0-9][A-Za-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*$'
 HOST_RE='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
 
@@ -110,12 +109,101 @@ printf '%s' "$SECRETS_PREFIX" | grep -Eq '^[A-Za-z0-9_/-]+$' \
   || die "CHURNER_SECRETS_PREFIX is not a usable Secrets Manager prefix (got '${SECRETS_PREFIX}')"
 [ -d "$ROUTES_DIR" ] || die "routes directory ${ROUTES_DIR} does not exist — was the host bootstrapped?"
 
+# --- Generated secrets (BEGIN shared block) -----------------------------------
+#
+# Byte-identical in `preview-workflow/host/deploy-preview.sh` and
+# `release-workflow/host/deploy-release.sh` (a test compares the two): each
+# script is fetched and checksum-verified on its own, so a sourced helper
+# would be a third file with a third pin.
+#
+# A secrets-file line is `NAME` (the secret must already exist) or
+# `NAME:generate` — a secret the application owns, such as a signing key,
+# which no human needs to choose. For the second form, a secret that does not
+# exist is CREATED: 48 random bytes, base64url, no padding. The value goes
+# from `openssl` through `tr` straight into a 0600 file and reaches
+# `create-secret` as `file://`, so it is never a shell variable, never an
+# argv, and never a log line.
+
+# The environment-variable name a secrets-file token stands for, or a refusal.
+# Prints the name; returns non-zero (after saying why) for anything but
+# `NAME` or `NAME:generate`.
+secret_key_name() {
+  case "$1" in
+    *:generate) key_candidate="${1%:generate}" ;;
+    *:*) warn "secret key '$1' has an unknown suffix — the only one understood is ':generate'"; return 1 ;;
+    *) key_candidate="$1" ;;
+  esac
+  case "$key_candidate" in
+    [A-Za-z_]*) ;;
+    *) warn "secret key '$1' is not a usable environment-variable name"; return 1 ;;
+  esac
+  case "$key_candidate" in
+    *[!A-Za-z0-9_]*) warn "secret key '$1' is not a usable environment-variable name"; return 1 ;;
+  esac
+  printf '%s' "$key_candidate"
+}
+
+# Creates `$1` when it does not exist. Only a ResourceNotFoundException
+# counts as "does not exist": a denial or a throttle on the READ says nothing
+# about whether the secret is there, and creating on one would be a guess.
+ensure_generated_secret() {
+  gen_id="$1"
+  gen_err="$(mktemp)"
+  # shellcheck disable=SC2086
+  if aws $AWS_ARGS secretsmanager get-secret-value \
+      --secret-id "$gen_id" --output json >/dev/null 2>"$gen_err"; then
+    rm -f "$gen_err"
+    return 0
+  fi
+  if ! grep -q 'ResourceNotFoundException' "$gen_err"; then
+    rm -f "$gen_err"
+    die "reading ${gen_id} failed for a reason other than its absence (denied, throttled or unreachable); not generating a replacement for a secret that may already exist"
+  fi
+
+  gen_file="$(mktemp)"
+  trap 'rm -f "$gen_file" "$gen_err"' EXIT
+  chmod 600 "$gen_file"
+  if ! openssl rand -base64 48 | tr -d '\n=' | tr '+/' '-_' > "$gen_file"; then
+    die "could not generate a value for ${gen_id}"
+  fi
+  [ -s "$gen_file" ] || die "could not generate a value for ${gen_id}"
+
+  gen_status=0
+  # shellcheck disable=SC2086
+  aws $AWS_ARGS secretsmanager create-secret \
+    --name "$gen_id" \
+    --secret-string "file://${gen_file}" \
+    --tags Key=churner-generated,Value=true \
+    --output json >/dev/null 2>"$gen_err" || gen_status=$?
+  rm -f "$gen_file"
+
+  if [ "$gen_status" -eq 0 ]; then
+    rm -f "$gen_err"
+    trap - EXIT
+    log "generated ${gen_id}"
+    return 0
+  fi
+  if grep -q 'ResourceExistsException' "$gen_err"; then
+    # A concurrent deploy created it first; the read below picks up its value.
+    rm -f "$gen_err"
+    trap - EXIT
+    return 0
+  fi
+  if grep -Eq 'AccessDenied|not authorized' "$gen_err"; then
+    rm -f "$gen_err"
+    die "this host may not create ${gen_id}: the environment's Churner stack predates generated secrets. Update it to the current template from Churner's Access page, or create ${gen_id} yourself."
+  fi
+  rm -f "$gen_err"
+  die "creating ${gen_id} failed (exit ${gen_status})"
+}
+# --- Generated secrets (END shared block) -------------------------------------
+
 # Every requested key, checked before the FIRST one is fetched: a partial
 # apply that dies halfway would leave the container running on some of its
 # configuration, which is worse than not running at all.
-for key in $SECRET_KEYS; do
-  printf '%s' "$key" | grep -Eq "$ENV_NAME_RE" \
-    || die "secret key '${key}' is not a usable environment-variable name"
+for entry in $SECRET_KEYS; do
+  secret_key_name "$entry" >/dev/null \
+    || die "secret key '${entry}' must be NAME or NAME:generate"
 done
 
 DB_NAME="preview_${PR}"
@@ -251,12 +339,16 @@ export PORT="$HOST_PORT"
 
 # `-e NAME` reads these from here. The loop exports; nothing echoes.
 ENV_FLAGS="-e PORT -e DATABASE_URL"
-for key in $SECRET_KEYS; do
+for entry in $SECRET_KEYS; do
+  key="$(secret_key_name "$entry")" || die "secret key '${entry}' must be NAME or NAME:generate"
   case "$key" in
     PORT|DATABASE_URL)
       warn "secret key ${key} would shadow a value this script derives; skipping it"
       continue
       ;;
+  esac
+  case "$entry" in
+    *:generate) ensure_generated_secret "${SECRETS_PREFIX}/${key}" ;;
   esac
   if ! value="$(read_secret "${SECRETS_PREFIX}/${key}")"; then
     die "reading ${SECRETS_PREFIX}/${key} failed — the host's role was denied, or the secret does not exist. It is named in .churner/preview/secrets, so starting without it would be a container running on configuration nobody asked for."
