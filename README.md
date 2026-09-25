@@ -102,14 +102,24 @@ aws codebuild import-source-credentials \
 Skip it for a public repository. Without it, builds fail with an
 authentication error rather than a missing-prerequisite one.
 
-### 5. Store your Churner preview token
+### 5. Your Churner preview token
 
-Create the secret named by the `PreviewTokenSecretName` output —
-`<secretsPrefix>/churner-preview-token` — and put your project's preview token
-in it (plain string, or JSON with a `token` key). The host's reaper reads it to
-post `destroyed` events. The module does **not** create this secret: Churner
-mints the token, and a stack that created it empty would look configured while
-posting nothing.
+The host's reaper posts `destroyed` events with the Churner preview token, read
+from two places in order:
+
+1. `<secretsPrefix>/churner-preview-token-stack` — created by the module itself
+   when it is applied with the `PreviewToken` parameter (`preview_token` in
+   Terraform), which the **Enable previews** / **Give your stack a new preview
+   token** apply link (or the Connect AWS link, with previews configured) fills
+   in. A resource policy lets only the preview host's role read it.
+2. `<secretsPrefix>/churner-preview-token` (the `PreviewTokenSecretName`
+   output) — the secret earlier instructions asked you to create by hand
+   (plain string, or JSON with a `token` key). Still honoured; the module never
+   creates or touches this name, so an existing one cannot collide with it.
+
+Applied with the parameter empty, the module creates no secret at all (an empty
+one would look configured while posting nothing). The reaper's fallback ships
+in `churner-ai/preview-stack@v4`.
 
 ## Script integrity
 

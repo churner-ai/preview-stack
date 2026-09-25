@@ -123,13 +123,20 @@ fi
 
 PREVIEW_TOKEN=""
 if [ -n "$TOKEN_SECRET_NAME" ]; then
-  PREVIEW_TOKEN="$(read_secret "$TOKEN_SECRET_NAME")"
-  # A plain-string secret is used as-is; a JSON one is expected to carry
-  # `token`. Anything else leaves the post skipped and said so.
-  case "$PREVIEW_TOKEN" in
-    \{*) PREVIEW_TOKEN="$(printf '%s' "$PREVIEW_TOKEN" | jq -r '.token // empty' 2>/dev/null || true)" ;;
-  esac
-  [ -n "$PREVIEW_TOKEN" ] || warn "could not read ${TOKEN_SECRET_NAME}; destroyed events will not be posted"
+  # Two places, in order: the secret the stack itself creates when it is
+  # applied with a PreviewToken (`<name>-stack`), then the one a customer
+  # created by hand under the original name. The stack-created one wins —
+  # it is the token Churner last handed the stack.
+  for candidate in "${TOKEN_SECRET_NAME}-stack" "$TOKEN_SECRET_NAME"; do
+    PREVIEW_TOKEN="$(read_secret "$candidate")"
+    # A plain-string secret is used as-is; a JSON one is expected to carry
+    # `token`. Anything else leaves the post skipped and said so.
+    case "$PREVIEW_TOKEN" in
+      \{*) PREVIEW_TOKEN="$(printf '%s' "$PREVIEW_TOKEN" | jq -r '.token // empty' 2>/dev/null || true)" ;;
+    esac
+    if [ -n "$PREVIEW_TOKEN" ]; then break; fi
+  done
+  [ -n "$PREVIEW_TOKEN" ] || warn "could not read ${TOKEN_SECRET_NAME}-stack or ${TOKEN_SECRET_NAME}; destroyed events will not be posted"
 fi
 
 db_field() {
